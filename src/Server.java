@@ -1,71 +1,74 @@
+import Utils.KeyLoader;
+import Utils.RSAUtils;
+
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
-import java.io.*;
+import java.io.File;
 import java.net.ServerSocket;
 import java.net.Socket;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.IvParameterSpec;
-import java.time.Instant;
-import java.time.Duration;
+import java.security.KeyPair;
+import java.security.PrivateKey;
+import java.security.PublicKey;
 
 public class Server {
-    public static void main(String[] args) throws IOException {
-        JFrame jFrame = new JFrame("Server Side");
-        jFrame.setSize(400, 400);
-        jFrame.setLayout(new BoxLayout(jFrame.getContentPane(), BoxLayout.Y_AXIS));
-        jFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+    private static final int SERVER_PORT = 1234;
+    private static final int CLIENT_RECEIVE_PORT = 5678;
+    private static final String CLIENT_IP = "localhost";
+
+    private static final String BOB_PRIVATE_KEY = "bob_private.key";
+    private static final String BOB_PUBLIC_KEY = "bob_public.key";
+    private static final String ALICE_PUBLIC_KEY = "alice_public.key";
+
+    public static void main(String[] args) {
+
+        new File("ServerFiles/").mkdirs();
+
+        try {
+            if (!KeyLoader.keysExist(BOB_PUBLIC_KEY, BOB_PRIVATE_KEY)) {
+                KeyPair keyPair = RSAUtils.generateKeyPair();
+                KeyLoader.saveKeys(keyPair, BOB_PUBLIC_KEY, BOB_PRIVATE_KEY);
+            }
+            PrivateKey privateKey = KeyLoader.loadPrivateKey(BOB_PRIVATE_KEY);
+            FileTransfer.setPrivateKey(privateKey);
+
+            PublicKey alicePublicKey = KeyLoader.loadPublicKey(ALICE_PUBLIC_KEY);
+            FileTransfer.setPublicKey(alicePublicKey);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return;
+        }
+
+        JFrame frame = new JFrame("Bob (Server)");
+        frame.setSize(600, 400);
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setLayout(new BorderLayout());
 
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        JScrollPane scroll = new JScrollPane(panel);
+        panel.setBackground(Color.WHITE);
 
-        JLabel title = new JLabel("Secure File Receiver");
-        title.setFont(new Font("Arial", Font.BOLD, 25));
-        title.setBorder(new EmptyBorder(20,0,10,0));
-        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JLabel label = new JLabel("Bob Server: Ready to receive files");
+        label.setBorder(new EmptyBorder(20, 0, 20, 0));
+        label.setFont(new Font("Arial", Font.BOLD, 20));
+        label.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        jFrame.add(title);
-        jFrame.add(scroll);
-        jFrame.setVisible(true);
+        panel.add(label);
+        frame.add(panel, BorderLayout.CENTER);
+        frame.setLocationRelativeTo(null);
+        frame.setVisible(true);
 
-        ServerSocket server = new ServerSocket(1234);
-        while (true) {
-            try (Socket sock = server.accept();
-                 ObjectInputStream in = new ObjectInputStream(sock.getInputStream())) {
-
-                SecureFile sf = (SecureFile) in.readObject();
-
-                if (checkReplay(sf.getNonce(), sf.getTimestamp(), panel)) {
-                    System.out.println("Replay detected! Discarding.");
-                    continue;
+        new Thread(() -> {
+            try (ServerSocket serverSocket = new ServerSocket(SERVER_PORT)) {
+                System.out.println("Server listening on port " + SERVER_PORT);
+                while (true) {
+                    Socket socket = serverSocket.accept();
+                    FileTransfer.receiveFile(socket, "ServerFiles/");
                 }
-
-                SecretKey aesKey = CryptoUtils.generateAESKey(); // Actually you need shared key; demo uses ephemeral
-                IvParameterSpec iv = new IvParameterSpec(sf.getIv());
-
-                byte[] dec = CryptoUtils.decrypt(sf.getEncryptedData(), aesKey, iv);
-                panel.add(createFileRow(sf.getFileName()));
-                panel.revalidate();
-
-                System.out.println("Received and decrypted: " + sf.getFileName());
             } catch (Exception ex) {
                 ex.printStackTrace();
             }
-        }
-    }
-
-    private static boolean checkReplay(String nonce, String ts, JPanel panel) {
-        if (ReplayProtection.isNonceUsed(nonce)) return true;
-        Instant t = Instant.parse(ts);
-        if (Duration.between(t, Instant.now()).toMinutes() > 5) return true;
-        ReplayProtection.addNonce(nonce);
-        return false;
-    }
-
-    private static JPanel createFileRow(String name) {
-        JPanel row = new JPanel();
-        row.add(new JLabel(name));
-        return row;
+        }).start();
     }
 }

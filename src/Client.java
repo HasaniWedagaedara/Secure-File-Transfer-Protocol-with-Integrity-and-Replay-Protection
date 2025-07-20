@@ -1,95 +1,109 @@
+import Utils.KeyLoader;
+import Utils.RSAUtils;
+
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
-import java.io.*;
+import java.io.File;
+import java.net.ServerSocket;
 import java.net.Socket;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.IvParameterSpec;
+import java.security.KeyPair;
+import java.security.PrivateKey;
+import java.security.PublicKey;
 
 public class Client {
+
+    private static final String SERVER_ADDRESS = "localhost";
+    private static final int SERVER_PORT = 1234;
+    private static final int CLIENT_RECEIVE_PORT = 5678;
+
+    private static final String ALICE_PRIVATE_KEY = "alice_private.key";
+    private static final String ALICE_PUBLIC_KEY = "alice_public.key";
+    private static final String BOB_PUBLIC_KEY = "bob_public.key";
+
     public static void main(String[] args) {
-        final File[] fileToSend = new File[1];
 
-        JFrame jFrame = new JFrame("Client Side");
-        jFrame.setSize(450, 450);
-        jFrame.setLayout(new BoxLayout(jFrame.getContentPane(), BoxLayout.Y_AXIS));
-        jFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        new File("ClientFiles/").mkdirs();
 
-        JLabel jlTitle = new JLabel("File Sender");
-        jlTitle.setFont(new Font("Arial", Font.BOLD, 25));
-        jlTitle.setBorder(new EmptyBorder(20, 0, 10, 0));
-        jlTitle.setAlignmentX(Component.CENTER_ALIGNMENT);
+        try {
+            if (!KeyLoader.keysExist(ALICE_PUBLIC_KEY, ALICE_PRIVATE_KEY)) {
+                KeyPair keyPair = RSAUtils.generateKeyPair();
+                KeyLoader.saveKeys(keyPair, ALICE_PUBLIC_KEY, ALICE_PRIVATE_KEY);
+            }
+            PrivateKey privateKey = KeyLoader.loadPrivateKey(ALICE_PRIVATE_KEY);
+            FileTransfer.setPrivateKey(privateKey);
 
-        JLabel jlFileName = new JLabel("choose a file to send");
-        jlFileName.setFont(new Font("Arial", Font.BOLD, 20));
-        jlFileName.setBorder(new EmptyBorder(50, 0, 10, 0));
-        jlFileName.setAlignmentX(Component.CENTER_ALIGNMENT);
+            PublicKey bobPublicKey = KeyLoader.loadPublicKey(BOB_PUBLIC_KEY);
+            FileTransfer.setPublicKey(bobPublicKey);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return;
+        }
 
-        JPanel jpButton = new JPanel();
-        jpButton.setBorder(new EmptyBorder(75, 0, 10, 0));
+        JFrame frame = new JFrame("Alice (Client)");
+        frame.setSize(600, 400);
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setLayout(new BorderLayout());
 
-        JButton jbSendFile = new JButton("Send file");
-        jbSendFile.setPreferredSize(new Dimension(150, 75));
-        jbSendFile.setFont(new Font("Arial", Font.BOLD, 20));
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBackground(Color.WHITE);
 
-        JButton jbChooseFile = new JButton("Choose file");
-        jbChooseFile.setPreferredSize(new Dimension(150, 75));
-        jbChooseFile.setFont(new Font("Arial", Font.BOLD, 20));
+        JLabel label = new JLabel("Select a file to send to server");
+        label.setBorder(new EmptyBorder(20, 0, 20, 0));
+        label.setFont(new Font("Arial", Font.BOLD, 20));
+        label.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        jpButton.add(jbSendFile);
-        jpButton.add(jbChooseFile);
+        JButton chooseButton = new JButton("Choose File");
+        JButton sendButton = new JButton("Send File");
 
-        jbChooseFile.addActionListener(e -> {
+        JLabel fileLabel = new JLabel("No file selected");
+        fileLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        panel.add(label);
+        panel.add(chooseButton);
+        panel.add(fileLabel);
+        panel.add(sendButton);
+
+        frame.add(panel, BorderLayout.CENTER);
+        frame.setLocationRelativeTo(null);
+        frame.setVisible(true);
+
+        final File[] fileToSend = {null};
+
+        chooseButton.addActionListener(e -> {
             JFileChooser chooser = new JFileChooser();
-            chooser.setDialogTitle("Choose a file to send");
             if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
                 fileToSend[0] = chooser.getSelectedFile();
-                jlFileName.setText("Selected: " + fileToSend[0].getName());
+                fileLabel.setText("Selected: " + fileToSend[0].getName());
             }
         });
 
-        jbSendFile.addActionListener(e -> {
+        sendButton.addActionListener(e -> {
             if (fileToSend[0] == null) {
-                jlFileName.setText("Please choose a file first.");
-            } else {
-                try (Socket socket = new Socket("localhost", 1234);
-                     ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream())) {
-
-                    byte[] plain = java.nio.file.Files.readAllBytes(fileToSend[0].toPath());
-
-                    SecretKey aesKey = CryptoUtils.generateAESKey();
-                    IvParameterSpec iv = CryptoUtils.generateIV();
-                    byte[] enc = CryptoUtils.encrypt(plain, aesKey, iv);
-
-                    String nonce = CryptoUtils.generateNonce();
-                    String ts = CryptoUtils.getTimestamp();
-
-                    ByteArrayOutputStream ms = new ByteArrayOutputStream();
-                    ms.write(iv.getIV());
-                    ms.write(enc);
-                    byte[] dataForHmac = ms.toByteArray();
-                    String hmac = CryptoUtils.computeHMAC(dataForHmac, aesKey);
-
-                    SecureFile sf = new SecureFile();
-                    sf.setFileName(fileToSend[0].getName());
-                    sf.setEncryptedData(enc);
-                    sf.setIv(iv.getIV());
-                    sf.setNonce(nonce);
-                    sf.setTimestamp(ts);
-                    sf.setHmac(hmac);
-
-                    out.writeObject(sf);
-                    System.out.println("Sent secure file: " + fileToSend[0].getName());
-
-                } catch (Exception ex) {
-                    ex.printStackTrace();
-                }
+                JOptionPane.showMessageDialog(null, "No file selected!");
+                return;
+            }
+            try {
+                FileTransfer.sendFile(fileToSend[0], SERVER_ADDRESS, SERVER_PORT);
+                JOptionPane.showMessageDialog(null, "File sent securely!");
+            } catch (Exception ex) {
+                ex.printStackTrace();
+                JOptionPane.showMessageDialog(null, "Failed to send file: " + ex.getMessage());
             }
         });
 
-        jFrame.add(jlTitle);
-        jFrame.add(jlFileName);
-        jFrame.add(jpButton);
-        jFrame.setVisible(true);
+        // Start background thread to receive files
+        new Thread(() -> {
+            try (ServerSocket serverSocket = new ServerSocket(CLIENT_RECEIVE_PORT)) {
+                System.out.println("Client listening on port " + CLIENT_RECEIVE_PORT);
+                while (true) {
+                    Socket socket = serverSocket.accept();
+                    FileTransfer.receiveFile(socket, "ClientFiles/");
+                }
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }).start();
     }
 }
