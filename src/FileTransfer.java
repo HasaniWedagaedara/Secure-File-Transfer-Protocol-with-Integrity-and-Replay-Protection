@@ -85,33 +85,28 @@ public class FileTransfer {
     }
 
     // Receive file securely
-    public static void receiveFile(Socket socket, String saveDir) {
+    public static String receiveFile(Socket socket, String saveDir) {
         try (DataInputStream in = new DataInputStream(socket.getInputStream())) {
             int length = in.readInt();
-            if (length <= 0) return;
+            if (length <= 0) return null;
 
             byte[] encryptedPayload = new byte[length];
             in.readFully(encryptedPayload);
 
-            // Decrypt
             byte[] decryptedPayload = AESUtils.decrypt(encryptedPayload, AES_KEY);
-
             SecureFile payload = deserialize(decryptedPayload);
 
-            // Check timestamp freshness
             long now = System.currentTimeMillis();
             if (Math.abs(now - payload.getTimestamp()) > ALLOWED_TIME_WINDOW_MS) {
                 System.err.println("Rejected: Timestamp invalid");
-                return;
+                return null;
             }
 
-            // Check nonce for replay
             if (usedNonces.contains(payload.getNonce())) {
                 System.err.println("Rejected: Nonce replay");
-                return;
+                return null;
             }
 
-            // Verify signature
             byte[] dataToVerify = serialize(new SecureFile(
                     payload.getFileName(),
                     payload.getFileContent(),
@@ -121,17 +116,19 @@ public class FileTransfer {
 
             if (!RSAUtils.verify(dataToVerify, payload.getSignature(), publicKey)) {
                 System.err.println("Rejected: Signature invalid");
-                return;
+                return null;
             }
 
-            // Save file
             usedNonces.add(payload.getNonce());
             File outFile = new File(saveDir + payload.getFileName());
             FileUtils.writeFile(outFile.getAbsolutePath(), payload.getFileContent());
 
             System.out.println("Received and saved file: " + outFile.getAbsolutePath());
+            return outFile.getAbsolutePath(); // <-- return the saved path
         } catch (Exception e) {
             e.printStackTrace();
+            return null;
         }
     }
+
 }
